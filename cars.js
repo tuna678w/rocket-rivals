@@ -7,7 +7,7 @@ const PI = Math.PI;
 const t = new Float32Array(16), m1 = new Float32Array(16), m2 = new Float32Array(16), parent = new Float32Array(16);
 const hex = h => [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255];
 const box = (b, x, y, z, sx, sy, sz, c, em = 0, spec = 0.3, yaw = 0, pitch = 0, roll = 0) => { M4.compose(t, x, y, z, yaw, pitch, roll, sx, sy, sz); b.add(PRIM.box, t, c, em, spec); };
-const cyl = (b, x, y, z, r, h, c, em, spec, pitch, roll, yaw = 0) => { M4.compose(t, x, y, z, yaw, pitch, roll, r, h, r); b.add(PRIM.cylLo, t, c, em, spec); };
+const cyl = (b, x, y, z, r, h, c, em, spec, pitch, roll, yaw = 0, prim = PRIM.cylLo) => { M4.compose(t, x, y, z, yaw, pitch, roll, r, h, r); b.add(prim, t, c, em, spec); };
 const dim = (c, k) => c.map(v => Math.min(1, v * k));
 
 const TEAMS = [
@@ -24,14 +24,14 @@ function buildCar(team) {
     { z: -0.8, w: 1.03, yb: -0.36, yt: 0.25, n: 3 }, { z: 0.3, w: 1.04, yb: -0.36, yt: 0.28, n: 3 }, { z: 1.2, w: 1.02, yb: -0.35, yt: 0.31, n: 3 },
     { z: 1.75, w: 0.96, yb: -0.32, yt: 0.34, n: 3 }, { z: 2.0, w: 0.78, yb: -0.27, yt: 0.30, n: 2.8 }
   ];
-  b.add(PRIM.loft(body, 22), null, P, 0.05, 0.9);
+  b.add(PRIM.loft(body, 36), null, P, 0.05, 0.9);
   const cab = [
     { z: -0.55, w: 0.60, yb: 0.2, yt: 0.30, n: 2.6 }, { z: -0.15, w: 0.74, yb: 0.2, yt: 0.62, n: 2.6 }, { z: 0.45, w: 0.74, yb: 0.2, yt: 0.74, n: 2.6 },
     { z: 1.0, w: 0.70, yb: 0.2, yt: 0.62, n: 2.6 }, { z: 1.35, w: 0.54, yb: 0.2, yt: 0.34, n: 2.6 }
   ];
-  b.add(PRIM.loft(cab, 18), null, hex('#08111f'), 0.02, 1.0);
+  b.add(PRIM.loft(cab, 30), null, hex('#08111f'), 0.02, 1.0);
   const roof = [{ z: -0.05, w: 0.50, yb: 0.66, yt: 0.70, n: 3 }, { z: 0.3, w: 0.52, yb: 0.70, yt: 0.78, n: 3 }, { z: 0.85, w: 0.48, yb: 0.64, yt: 0.70, n: 3 }];
-  b.add(PRIM.loft(roof, 14), null, P2, 0.05, 0.9);
+  b.add(PRIM.loft(roof, 22), null, P2, 0.05, 0.9);
   // hood / roof racing stripe
   box(b, 0, 0.255, -0.95, 0.34, 0.025, 1.5, L, 0.35, 0.6); box(b, 0, 0.30, 0.9, 0.34, 0.025, 1.1, L, 0.35, 0.6);
   // lights
@@ -59,9 +59,9 @@ function buildCar(team) {
 }
 function buildWheel() {
   const b = new Builder();
-  cyl(b, 0, 0, 0, 0.47, 0.38, [0.025, 0.027, 0.032], 0, 0.15, 0, PI / 2);       // tyre
-  cyl(b, 0, 0, 0, 0.33, 0.405, [0.78, 0.82, 0.9], 0.05, 1.0, 0, PI / 2);         // rim
-  cyl(b, 0, 0, 0, 0.17, 0.43, [0.12, 0.14, 0.2], 0, 0.8, 0, PI / 2);             // hub
+  cyl(b, 0, 0, 0, 0.47, 0.38, [0.025, 0.027, 0.032], 0, 0.15, 0, PI / 2, 0, PRIM.cylHi);       // tyre
+  cyl(b, 0, 0, 0, 0.33, 0.405, [0.78, 0.82, 0.9], 0.05, 1.0, 0, PI / 2, 0, PRIM.cylHi);         // rim
+  cyl(b, 0, 0, 0, 0.17, 0.43, [0.12, 0.14, 0.2], 0, 0.8, 0, PI / 2, 0, PRIM.cyl);             // hub
   for (let k = 0; k < 3; k++) box(b, 0, 0, 0, 0.44, 0.07, 0.62, [0.95, 0.97, 1.0], 0.1, 1.0, 0, k * PI / 3, 0);
   return b.build();
 }

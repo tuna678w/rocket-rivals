@@ -101,7 +101,7 @@ function primLoft(stations, ring = 20, capEnds = true) {
   for (let q = 0; q < n.length; q += 3) { const l = Math.hypot(n[q], n[q + 1], n[q + 2]) || 1; n[q] /= l; n[q + 1] /= l; n[q + 2] /= l; }
   return { p, n, i };
 }
-const PRIM = { box: primBox(), sphere: primSphere(), sphereLo: primSphere(10, 14), cyl: primCyl(20), cylLo: primCyl(10), cone: primCyl(16, 0.001, 1), quad: primQuad(), loft: primLoft };
+const PRIM = { box: primBox(), sphere: primSphere(32, 48), sphereLo: primSphere(10, 14), cyl: primCyl(28), cylLo: primCyl(12), cylHi: primCyl(40), cone: primCyl(16, 0.001, 1), quad: primQuad(), loft: primLoft };
 
 const STRIDE = 12; // pos3 norm3 col3 mat3(emissive, spec, anim)
 class Builder {
@@ -181,20 +181,25 @@ uniform sampler2D uShadow, uTex;
 uniform vec3 uBallPts[32];
 
 float unpackD(vec4 c){ return dot(c, vec4(1.0, 1.0/255.0, 1.0/65025.0, 1.0/16581375.0)); }
+float sCmp(vec2 uv, float cur){ return cur > unpackD(texture2D(uShadow, uv)) ? 0.0 : 1.0; }
+// hardware-independent bilinear shadow filtering (the depth texture itself must stay NEAREST because it is RGBA-packed)
+float sBilinear(vec2 uv, float cur){
+  vec2 px = uv / uTexel - 0.5; vec2 f = fract(px); vec2 base = (floor(px) + 0.5) * uTexel;
+  float a = sCmp(base, cur), b = sCmp(base + vec2(uTexel, 0.0), cur), c = sCmp(base + vec2(0.0, uTexel), cur), d = sCmp(base + vec2(uTexel, uTexel), cur);
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
 float shadowTerm(float ndl){
   if (uShadowOn < 0.5) return 1.0;
   if (vSh.x < 0.0 || vSh.x > 1.0 || vSh.y < 0.0 || vSh.y > 1.0 || vSh.z > 1.0) return 1.0;
   float cur = vSh.z - (0.0007 + 0.0014 * (1.0 - ndl));
-  float s = 0.0;
-  if (uPCF > 0.5) {
-    for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) {
-      float d = unpackD(texture2D(uShadow, vSh.xy + vec2(float(x), float(y)) * uTexel));
-      s += cur > d ? 0.0 : 1.0;
-    }
-    return s / 9.0;
+  if (uPCF > 1.5) {          // HIGH: 4 bilinear-filtered taps (16 fetches) -> soft, stable edges
+    float s = 0.0;
+    s += sBilinear(vSh.xy + vec2(-0.75, -0.75) * uTexel, cur); s += sBilinear(vSh.xy + vec2(0.75, -0.75) * uTexel, cur);
+    s += sBilinear(vSh.xy + vec2(-0.75, 0.75) * uTexel, cur);  s += sBilinear(vSh.xy + vec2(0.75, 0.75) * uTexel, cur);
+    return s * 0.25;
   }
-  float d = unpackD(texture2D(uShadow, vSh.xy));
-  return cur > d ? 0.0 : 1.0;
+  if (uPCF > 0.5) return sBilinear(vSh.xy, cur);   // MEDIUM: bilinear PCF (4 fetches)
+  return sCmp(vSh.xy, cur);
 }
 vec3 envColor(vec3 R){
   float h = clamp(R.y * 0.5 + 0.5, 0.0, 1.0);
@@ -243,7 +248,7 @@ void main(){
     spec = 0.75; shin = 55.0;
   } else if (uMode > 2.5 && uMode < 3.5) {     // glass wall
     float fr = pow(1.0 - max(dot(N, V), 0.0), 3.0);
-    float u = fract((vWorld.x + vWorld.z) / 5.0); float lines = smoothstep(0.025, 0.0, min(u, 1.0 - u));
+    float gu = (vWorld.x + vWorld.z) / 5.0; float u = fract(gu); float lw = max(FW(vec2(gu)).x, 0.0005); float lines = 1.0 - smoothstep(0.012, 0.012 + lw * 1.5, min(u, 1.0 - u));
     alpha = clamp(0.06 + fr * 0.55 + lines * 0.3, 0.0, 0.8);
     albedo = vec3(0.35, 0.65, 0.8); spec = 0.0;
     emitCol = vec3(0.3, 0.7, 1.0) * lines * 0.5;
@@ -262,9 +267,10 @@ void main(){
     float h = d.y;
     vec3 col = mix(vec3(0.05, 0.12, 0.22), vec3(0.01, 0.02, 0.07), smoothstep(0.0, 0.55, h));
     col += vec3(0.25, 0.10, 0.28) * exp(-abs(h) * 9.0) * 0.55;
-    vec2 sp = floor(vec2(atan(d.x, d.z) * 260.0, h * 260.0));
+    vec2 sg = vec2(atan(d.x, d.z) * 160.0, h * 160.0); vec2 sp = floor(sg);
     float st = fract(sin(dot(sp, vec2(12.9898, 78.233))) * 43758.5453);
-    col += vec3(st > 0.9975 ? 1.0 : 0.0) * smoothstep(0.1, 0.5, h) * (0.5 + 0.5 * sin(uTime * 2.0 + st * 50.0));
+    float sd = length(fract(sg) - 0.5);
+    col += vec3(st > 0.996 ? smoothstep(0.32, 0.0, sd) : 0.0) * smoothstep(0.1, 0.5, h) * (0.5 + 0.5 * sin(uTime * 2.0 + st * 50.0));
     gl_FragColor = vec4(col, 1.0); return;
   } else if (uMode > 6.5) {                    // textured banner
     vec2 uv = vLocal.xy + 0.5; uv.x = fract(uv.x * max(uRim.x, 1.0));
@@ -336,10 +342,11 @@ const partProg = program(PVS, PFS, ['aPos', 'aUV', 'aColor', 'aKind']);
 
 // ------------------------------------------------------------------ state
 const G = { gl, canvas, M4, PRIM, Builder, makeMesh, primMesh, PI, TAU, main, shadowProg, partProg, quality: 'high', W: 1, H: 1 };
+// dpr: max device-pixel-ratio used; px: hardware-aware pixel budget; minScale: floor for automatic resolution scaling
 const QUALITY = {
-  low:    { dpr: 0.85,  shadow: 0,    pcf: 0, lights: 3, particles: 450,  crowdAnim: false, trails: false },
-  medium: { dpr: 1.0, shadow: 1024, pcf: 0, lights: 6, particles: 1000, crowdAnim: true,  trails: true },
-  high:   { dpr: 1.5, shadow: 2048, pcf: 1, lights: 8, particles: 2000, crowdAnim: true,  trails: true }
+  low:    { dpr: 1.0, px: 2.1e6, minScale: 0.7,  shadow: 0,    pcf: 0, lights: 3, particles: 450,  crowdAnim: false, trails: false },
+  medium: { dpr: 1.5, px: 3.7e6, minScale: 0.75, shadow: 1024, pcf: 1, lights: 6, particles: 1000, crowdAnim: true,  trails: true },
+  high:   { dpr: 2.0, px: 8.3e6, minScale: 0.85, shadow: 2048, pcf: 2, lights: 8, particles: 2000, crowdAnim: true,  trails: true }
 };
 G.QUALITY = QUALITY;
 G.q = QUALITY.high;
@@ -366,10 +373,14 @@ G.setQuality = function (name) {
   }
   G.resize(true);
 };
-G.scale = 1;
+G.scale = 1;          // automatic scale (only moves when resolution = AUTO)
+G.userScale = 0;      // 0 = AUTO, otherwise a fixed render scale chosen by the player (0.5 .. 1.5)
 G.resize = function (force) {
-  const ratio = Math.min(G.q.dpr, window.devicePixelRatio || 1) * G.scale;
-  const w = Math.max(1, Math.floor(canvas.clientWidth * ratio)), h = Math.max(1, Math.floor(canvas.clientHeight * ratio));
+  const cw = Math.max(1, canvas.clientWidth), ch = Math.max(1, canvas.clientHeight);
+  let ratio = Math.min(G.q.dpr, window.devicePixelRatio || 1) * (G.userScale || G.scale);
+  const budget = G.userScale > 1 ? G.q.px * 1.6 : G.q.px;           // supersampling allowed a bit above the preset budget
+  if (cw * ch * ratio * ratio > budget) ratio = Math.sqrt(budget / (cw * ch));
+  const w = Math.max(1, Math.round(cw * ratio)), h = Math.max(1, Math.round(ch * ratio));
   if (force || canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   G.W = canvas.width; G.H = canvas.height;
 };
@@ -407,7 +418,7 @@ G.beginFrame = function (time, cam, fov, shadowCenter) {
   G.camPos[0] = cam.ex; G.camPos[1] = cam.ey; G.camPos[2] = cam.ez;
   G.time = time;
   // light matrices (ortho around the arena)
-  const R = 46, d = env.sunDir, c = shadowCenter || [0, 0, 0];
+  const R = 46, d = env.sunDir, c = [0, 0, 0]; void shadowCenter;   // fixed frustum: a moving centre made shadow edges shimmer
   M4.lookAt(lightV, c[0] + d[0] * 90, c[1] + d[1] * 90, c[2] + d[2] * 90, c[0], c[1], c[2], 0, 0, -1);
   M4.ortho(lightP, -R, R, -R, R, 1, 200);
   M4.mul(lightVP, lightP, lightV);

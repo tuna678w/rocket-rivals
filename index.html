@@ -34,12 +34,18 @@
       <p class="subheading">Rocket-powered cars. One giant ball. First to the goal. Challenge a friend in your own private arena.</p>
 
       <div id="menuHome">
-        <button id="soloBtn" class="button primary"><span class="button-art">✦</span><span>PLAY VS BOT</span><span class="arrow">↗</span></button>
-        <button id="quickBtn" class="button secondary" style="width:100%;margin-top:10px">QUICK MATCH (RANDOM OPPONENT)</button>
+        <button id="playBtn" class="button primary"><span class="button-art">✦</span><span>PLAY ONLINE</span><span class="arrow">↗</span></button>
+        <button id="soloBtn" class="button secondary" style="width:100%;margin-top:10px">PLAY VS BOT (OFFLINE PRACTICE)</button>
         <div class="or-row"><span></span>OR PLAY A FRIEND<span></span></div>
         <button id="createBtn" class="button primary"><span class="button-art">✦</span><span>CREATE PRIVATE ROOM</span><span class="arrow">↗</span></button>
         <div class="or-row"><span></span>OR JOIN YOUR FRIEND<span></span></div>
         <div class="join-row"><input id="codeInput" maxlength="5" spellcheck="false" autocomplete="off" aria-label="Room code" placeholder="ENTER ROOM CODE" /><button id="joinBtn" class="button secondary">JOIN ROOM →</button></div>
+      </div>
+
+      <div id="menuSearch" class="hidden">
+        <div class="lobby-label">PUBLIC MATCHMAKING</div>
+        <div class="lobby-status"><span class="lobby-spinner"></span><span id="searchStatus">Searching for opponent...</span></div>
+        <button id="cancelSearchBtn" class="button secondary" style="width:100%;margin-top:14px">CANCEL SEARCH</button>
       </div>
 
       <div id="menuLobby" class="hidden">
@@ -57,6 +63,7 @@
 
   <div id="inGame" class="hidden">
     <div id="leftLabel">YOU <span id="teamColor">BLUE</span></div>
+    <button id="exitBtn" title="Leave match">✕ LEAVE</button>
     <div id="roomHUD">ROOM <span id="hudCode">-----</span><button id="hudCopy" aria-label="Copy invite link">⧉</button></div>
     <div id="tipLine">WASD DRIVE &nbsp; • &nbsp; SHIFT BOOST &nbsp; • &nbsp; SPACE JUMP / DOUBLE TAP TO FLIP &nbsp; • &nbsp; CTRL DRIFT &nbsp; • &nbsp; Q / E AIR ROLL &nbsp; • &nbsp; C BALL CAM</div>
     <div id="speedometer"><span id="speedNum">000</span><small>KM/H</small></div>
@@ -72,6 +79,7 @@
   <button id="settingsBtn" aria-label="Settings" title="Settings">⚙</button>
   <div id="settingsPanel" class="hidden">
     <div class="set-row"><span>GRAPHICS</span><div class="seg" id="qualitySeg"><button data-q="low">LOW</button><button data-q="medium">MED</button><button data-q="high">HIGH</button></div></div>
+    <div class="set-row"><span>RESOLUTION</span><div class="seg" id="resSeg"><button data-r="auto">AUTO</button><button data-r="0.5">50%</button><button data-r="0.75">75%</button><button data-r="1">100%</button><button data-r="1.5">150%</button></div></div>
     <div class="set-row"><span>VOLUME</span><input id="volRange" type="range" min="0" max="100" step="1" aria-label="Volume" /></div>
     <div class="set-row"><span>SOUND</span><button id="muteBtn" class="tog">ON</button></div>
     <div class="set-row"><span>CAMERA SHAKE</span><button id="shakeBtn" class="tog">ON</button></div>

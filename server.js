@@ -54,6 +54,9 @@ const server = http.createServer((req, res) => {
 });
 
 const botPeer = { isBot: true, send() {}, close() {} };
+// Public matchmaking queue: peers waiting for a real opponent (never filled with a bot).
+const queue = [];
+const dequeue = peer => { const i = queue.indexOf(peer); if (i >= 0) queue.splice(i, 1); return i >= 0; };
 
 let peerCounter = 0;
 class Peer {
@@ -106,12 +109,16 @@ class Peer {
     }
   }
   leave() {
+    dequeue(this);
     const room = this.room;
     if (!room) return;
     room.players[this.slot] = null;
     this.room = null; this.slot = -1;
     const other = room.players.find(Boolean);
-    if (other && !other.isBot) {
+    if (other && !other.isBot && room.public) {      // matchmade game: opponent gone -> back to the menu, room is destroyed
+      other.room = null; other.slot = -1; rooms.delete(room.code);
+      other.send({ type: 'peer_left', public: true });
+    } else if (other && !other.isBot) {
       room.game.phase = 'waiting';
       other.send({ type: 'peer_left' });
       room.lastActive = Date.now();
@@ -128,7 +135,7 @@ class Peer {
     this.leave();
     if (rooms.size >= MAX_ROOMS) { this.send({ type: 'error', message: 'All rooms are busy. Please try again later.' }); return null; }
     const code = roomCode();
-    const room = { code, players: [this, null], game: new Match(), lastActive: Date.now(), bot: false, pub: false, ...extra };
+    const room = { code, players: [this, null], game: new Match(), lastActive: Date.now(), bot: false, public: false, ...extra };
     rooms.set(code, room);
     this.room = room; this.slot = 0;
     this.send({ type: 'room', code, player: 0 });
@@ -137,9 +144,8 @@ class Peer {
   joinRoom(room) {
     const slot = room.players[0] ? 1 : 0;
     room.players[slot] = this; this.room = room; this.slot = slot;
-    room.pub = false;
     room.lastActive = Date.now();
-    this.send({ type: 'room', code: room.code, player: slot });
+    this.send({ type: 'room', code: room.code, player: slot, public: !!room.public });
     room.players.forEach(peer => peer && peer.send({ type: 'peer_joined' }));
     room.game.start();
     room.players.forEach(peer => peer && peer.send(room.game.snapshot()));
@@ -157,15 +163,27 @@ class Peer {
       this.send({ type: 'peer_joined' });
       room.game.start();
       this.send(room.game.snapshot());
-    } else if (msg.type === 'quick') {
-      let open = null;
-      for (const r of rooms.values()) if (r.pub && !r.bot && r.players.filter(Boolean).length === 1 && !r.players.includes(this)) { open = r; break; }
-      if (open) { this.leave(); this.joinRoom(open); }
-      else { const room = this.newRoom({ pub: true }); if (room) this.send(room.game.snapshot()); }
+    } else if (msg.type === 'find' || msg.type === 'quick') {
+      if (queue.includes(this)) { this.send({ type: 'searching', waiting: queue.length }); return; }   // duplicate request
+      this.leave();
+      let opp = null;
+      while (queue.length && !opp) { const q = queue.shift(); if (!q.closed && q !== this && !q.room) opp = q; }
+      if (!opp) { queue.push(this); this.send({ type: 'searching', waiting: queue.length }); return; }
+      if (rooms.size >= MAX_ROOMS) { queue.unshift(opp); this.send({ type: 'error', message: 'All matches are busy. Please try again later.' }); return; }
+      const code = roomCode();
+      const room = { code, players: [null, null], game: new Match(), lastActive: Date.now(), bot: false, public: true };
+      rooms.set(code, room); room.game.autoRestart = false;
+      opp.room = room; opp.slot = 0; this.room = room; this.slot = 1; room.players[0] = opp; room.players[1] = this;
+      opp.send({ type: 'room', code, player: 0, public: true }); this.send({ type: 'room', code, player: 1, public: true });
+      room.players.forEach(p => p.send({ type: 'peer_joined' }));
+      room.game.start();
+      room.players.forEach(p => p.send(room.game.snapshot()));
+    } else if (msg.type === 'cancel') {
+      if (dequeue(this)) this.send({ type: 'search_cancelled' });
     } else if (msg.type === 'join') {
       const code = String(msg.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
       const room = rooms.get(code);
-      if (!room || room.bot) { this.send({ type: 'error', message: 'Room not found. Check the code.' }); return; }
+      if (!room || room.bot || room.public) { this.send({ type: 'error', message: 'Room not found. Check the code.' }); return; }
       if (room.players.every(Boolean) && !room.players.includes(this)) {
         this.send({ type: 'error', message: 'Room is full (2 players max).' }); return;
       }
@@ -219,6 +237,10 @@ const tick = setInterval(() => { try {
       if (room.players[0] && room.players[1]) {
         if (room.bot && room.game.seq % 4 === 0) botThink(room.game, 1);
         room.game.step(1 / 60, 2);
+        if (room.game.ended) {   // matchmade game finished: release both players so they can queue again
+          for (const p of room.players) if (p) { p.room = null; p.slot = -1; p.send({ type: 'match_over' }); }
+          rooms.delete(room.code); break;
+        }
       }
     }
     steps++;

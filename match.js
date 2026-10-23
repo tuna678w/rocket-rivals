@@ -107,7 +107,7 @@ class Match {
     if (this.phase === 'waiting') this.start();
     if (this.phase === 'finished') {
       this.phaseTimer -= dt;
-      if (this.phaseTimer <= 0) this.start();
+      if (this.phaseTimer <= 0) { if (this.autoRestart === false) this.ended = true; else this.start(); }
       return;
     }
     if (this.phase === 'countdown') {

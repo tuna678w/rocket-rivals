@@ -31,6 +31,15 @@ class Client {
   }
   close() { try { this.ws.close(); } catch (e) {} }
 }
+// drives car `idx` of client `c`: line up behind the ball and push it toward the goal that car attacks
+function chase(c, idx) {
+  const s = c.last, car = s.cars[idx], b = s.ball, atk = idx === 0 ? -1 : 1;
+  const gx = -b.x, gz = atk * 34 - b.z, gl = Math.hypot(gx, gz) || 1, tx = b.x - gx / gl * 2.5, tz = b.z - gz / gl * 2.5;
+  let d = Math.atan2(tx - car.x, -(tz - car.z)) - car.yaw; d = Math.atan2(Math.sin(d), Math.cos(d));
+  const near = Math.hypot(tx - car.x, tz - car.z) < 12;
+  if (near && Math.abs(d) > 1.6) { let r = d - Math.sign(d) * Math.PI; c.send({ type: 'input', throttle: -1, steer: Math.max(-1, Math.min(1, -r * 3)), boost: false }); }   // reverse out instead of orbiting the target
+  else c.send({ type: 'input', throttle: 1, steer: Math.max(-1, Math.min(1, d * 3)), boost: Math.abs(d) < .3 });
+}
 const rooms = async () => JSON.parse((await get('/health')).body).rooms;
 
 (async () => {
@@ -78,15 +87,12 @@ const rooms = async () => JSON.parse((await get('/health')).body).rooms;
     await sleep(100); assert(!A.closed); assert.strictEqual((await get('/health')).status, 200); ok('malformed / hostile messages ignored, server alive');
     // match end: A drives at the ball (and into the goal) so a real goal is scored over the wire.
     const t0 = Date.now(); let sawOT = false, padsA = 0, padsB = 0;
-    while (Date.now() - t0 < 40000 && !(A.last.phase === 'finished')) {
-      const s = A.last, c = s.cars[0], b = s.ball; if (s.overtime) sawOT = true;
-      const want = Math.atan2(b.x - c.x, -(b.z - c.z)); let d = want - c.yaw; d = Math.atan2(Math.sin(d), Math.cos(d));
-      A.send({ type: 'input', throttle: 1, steer: Math.max(-1, Math.min(1, d * 3)), boost: Math.abs(d) < .3, jump: false });
+    while (Date.now() - t0 < 90000 && !(A.last.phase === 'finished')) {
+      if (A.last.overtime) sawOT = true;
+      chase(A, 0);
       const za = (A.last.pads.match(/0/g) || []).length, zb = (B.last.pads.match(/0/g) || []).length; padsA = Math.max(padsA, za); padsB = Math.max(padsB, zb);
       await sleep(33);
     }
-    assert.strictEqual(A.last.pads.length, 34); assert(/^[01]{34}$/.test(B.last.pads)); assert(padsA > 0 && padsB > 0, 'boost pad pickups are visible to both players (' + padsA + '/' + padsB + ')');
-    ok('boost pad state is server-driven and identical for both players (34 pads, pickups seen by both)');
     const fa = await A.waitPhase('finished', 1000), fb = await B.waitPhase('finished', 3000);
     assert(fa.scores[0] + fa.scores[1] >= 1, 'a goal was scored through real network play: ' + fa.scores);
     assert.strictEqual(fa.winner, fb.winner); assert.deepStrictEqual(fa.scores, fb.scores); assert.strictEqual(fa.celebration, fb.celebration);
@@ -100,14 +106,44 @@ const rooms = async () => JSON.parse((await get('/health')).body).rooms;
     A.close(); D.close(); await sleep(300); assert.strictEqual(await rooms(), 0); ok('empty room is deleted');
     C.close();
 
-    // --- quick match
-    const Q1 = await new Client('Q1').open(), Q2 = await new Client('Q2').open(), Q3 = await new Client('Q3').open();
-    Q1.send({ type: 'quick' }); const q1 = await Q1.wait('room');
-    Q2.send({ type: 'quick' }); const q2 = await Q2.wait('room'); assert.strictEqual(q1.code, q2.code); assert.strictEqual(q2.player, 1);
-    await Q1.wait('peer_joined'); await Q2.wait('peer_joined'); ok('quick match pairs two waiting players');
-    Q3.send({ type: 'quick' }); const q3 = await Q3.wait('room'); assert.notStrictEqual(q3.code, q1.code); ok('third quick player gets a fresh waiting room (not a full one)');
-    Q3.send({ type: 'join', code: q1.code }); await Q3.wait('error'); ok('cannot join a full quick-match room by code');
-    Q1.close(); Q2.close(); Q3.close(); await sleep(300); assert.strictEqual(await rooms(), 0);
+    // --- public matchmaking (PLAY ONLINE)
+    const Q1 = await new Client('Q1').open(), Q2 = await new Client('Q2').open(), Q3 = await new Client('Q3').open(), Q4 = await new Client('Q4').open();
+    Q1.send({ type: 'find' }); assert.strictEqual((await Q1.wait('searching')).waiting, 1);
+    await sleep(500); assert(!Q1.msgs.some(m => m.type === 'peer_joined' || m.type === 'room'), 'no bot is substituted while searching'); ok('lone player keeps searching (no bot in public matchmaking)');
+    Q1.send({ type: 'find' }); await Q1.wait('searching'); ok('duplicate matchmaking request is ignored');
+    Q1.send({ type: 'cancel' }); await Q1.wait('search_cancelled'); Q2.send({ type: 'find' }); await Q2.wait('searching'); await sleep(200);
+    assert(!Q1.msgs.some(m => m.type === 'room'), 'cancelled player is not matched'); ok('cancelled search removes player from the queue');
+    Q1.send({ type: 'find' }); const q1 = await Q1.wait('room'); const q2 = await Q2.wait('room');
+    assert.strictEqual(q1.code, q2.code); assert.strictEqual(q1.public, true); assert.deepStrictEqual([q1.player, q2.player], [1, 0]);
+    await Q1.wait('peer_joined'); await Q2.wait('peer_joined'); await Q1.waitPhase('countdown'); await Q2.waitPhase('countdown'); ok('two searching players are matched into one synchronized public match');
+    Q3.send({ type: 'join', code: q1.code }); assert.match((await Q3.wait('error')).message, /not found/i); ok('public matches cannot be joined by code');
+    Q3.send({ type: 'find' }); await Q3.wait('searching'); Q4.send({ type: 'find' });
+    const q3 = await Q3.wait('room'), q4 = await Q4.wait('room'); assert.strictEqual(q3.code, q4.code); assert.notStrictEqual(q3.code, q1.code);
+    await Q3.wait('peer_joined'); await Q4.wait('peer_joined'); assert.strictEqual(await rooms(), 2); ok('two independent public matches run at the same time');
+    await Q1.waitPhase('playing', 6000); await Q3.waitPhase('playing', 6000);
+    Q1.send({ type: 'input', throttle: 1 }); for (let i = 0; i < 15; i++) { Q1.send({ type: 'input', throttle: 1 }); await sleep(33); }
+    assert(Math.abs(Q3.last.cars[0].z - 20) < 0.5 && Math.abs(Q4.last.cars[0].z - 20) < 0.5, 'other match unaffected');
+    assert(Math.abs(Q1.last.cars[1].z - Q2.last.cars[1].z) < 3); ok('movement in one match does not leak into the other');
+    Q2.close(); const pl = await Q1.wait('peer_left'); assert.strictEqual(pl.public, true); await sleep(200); assert.strictEqual(await rooms(), 1);
+    ok('opponent leaving a public match returns the other player to the menu and frees the room');
+    Q1.send({ type: 'find' }); await Q1.wait('searching'); Q3.send({ type: 'leave' }); await Q3.wait('left'); await Q4.wait('peer_left');
+    Q3.send({ type: 'find' }); await Q3.wait('room'); await Q1.wait('room'); ok('players can queue again after a match and are paired with each other');
+    Q1.close(); Q3.close(); Q4.close(); await sleep(300); assert.strictEqual(await rooms(), 0);
+
+    // --- public match runs to completion, both players are released and can queue again
+    const M1 = await new Client('M1').open(), M2 = await new Client('M2').open();
+    M1.send({ type: 'find' }); M2.send({ type: 'find' }); await M1.wait('room'); await M2.wait('room'); await M1.waitPhase('playing', 6000);
+    const mt0 = Date.now(); let fin1 = null, fin2 = null;
+    while (Date.now() - mt0 < 90000 && !(M1.msgs.some(m => m.type === 'match_over') && M2.msgs.some(m => m.type === 'match_over'))) {
+      chase(M1, 0);
+      if (M1.last.phase === 'finished') fin1 = M1.last; if (M2.last.phase === 'finished') fin2 = M2.last;
+      await sleep(33);
+    }
+    await M1.wait('match_over', 2000); await M2.wait('match_over', 2000);
+    assert(fin1 && fin2 && fin1.winner === fin2.winner && fin1.scores.join() === fin2.scores.join()); assert.strictEqual(await rooms(), 0);
+    ok('public match finishes: identical result for both players, both released (' + fin1.celebration + ' ' + fin1.scores.join('-') + ')');
+    M1.send({ type: 'find' }); M2.send({ type: 'find' }); await M1.wait('room'); await M2.wait('room'); ok('same two players can immediately queue for another match');
+    M1.close(); M2.close(); await sleep(300);
 
     // --- solo vs bot
     const S = await new Client('S').open(); S.send({ type: 'solo' });

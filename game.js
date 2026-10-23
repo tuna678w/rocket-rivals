@@ -25,6 +25,7 @@ const teamGlow = i => (i === 1 ? ORANGE : BLUE);
 
 // ------------------------------------------------------------------ state
 let socket = null, player = -1, room = '', joined = false, connected = false, match = null, lastStateAt = 0, lastRoom = '', pendingRejoin = false;
+let searching = false;
 let retries = 0, reconnectTimer = null, clockPing = 0, ballCam = false;
 let desired = { type: 'input', throttle: 0, steer: 0, boost: false, jump: false, handbrake: false, airRoll: 0 };
 const keys = new Set(), touch = { throttle: 0, steer: 0, boost: false, jump: false, engaged: false };
@@ -37,12 +38,14 @@ let tGlobal = 0, snapNext = true, camSnap = true;
 // ------------------------------------------------------------------ network
 function network(ok) { connected = ok; $('networkDot').classList.toggle('offline', !ok); $('netText').textContent = ok ? 'ONLINE' : 'DISCONNECTED'; if (!ok) $('latency').textContent = '— ms'; }
 function showLobby() {
+  document.body.classList.remove('playing');
   joined = false; $('menu').classList.remove('hidden'); $('inGame').classList.add('hidden'); $('scoreboard').classList.add('hidden'); document.body.classList.remove('replay');
-  $('floatingMessage').className = 'hidden'; $('menuHome').classList.toggle('hidden', !!room); $('menuLobby').classList.toggle('hidden', !room);
+  $('floatingMessage').className = 'hidden'; $('menuHome').classList.toggle('hidden', !!room || searching); $('menuSearch').classList.toggle('hidden', !searching || !!room); $('menuLobby').classList.toggle('hidden', !room);
   if (room) { $('roomCode').textContent = room; $('lobbyStatus').textContent = 'Waiting for player 2 to join...'; }
   if (Sound.ready) Sound.silenceEngines();
 }
 function showGame() {
+  document.body.classList.add('playing');
   joined = true; $('menu').classList.add('hidden'); $('inGame').classList.remove('hidden'); $('scoreboard').classList.remove('hidden');
   $('leftLabel').innerHTML = 'YOU <span id="teamColor">' + (player === 0 ? 'BLUE' : 'ORANGE') + '</span>'; $('teamColor').style.color = player === 0 ? '#5ddcff' : '#ffb567';
   $('hudCode').textContent = room; snapNext = true; camSnap = true; resetEffects(); toast('MATCH FOUND — LET’S GO!');
@@ -62,9 +65,16 @@ function connect() {
   sock.addEventListener('message', evt => {
     if (socket !== sock) return; let msg; try { msg = JSON.parse(evt.data); } catch { return; }
     switch (msg.type) {
-      case 'room': room = msg.code; lastRoom = msg.code; player = msg.player; pendingRejoin = false; showLobby(); break;
+      case 'searching': searching = true; showLobby(); break;
+      case 'search_cancelled': searching = false; showLobby(); break;
+      case 'match_over': searching = false; room = ''; lastRoom = ''; player = -1; match = null; history.replaceState(null, '', location.pathname); showLobby(); toast('Match finished — press PLAY ONLINE to find another opponent.'); break;
+      case 'room': searching = false; room = msg.code; lastRoom = msg.code; player = msg.player; pendingRejoin = false; showLobby(); break;
       case 'peer_joined': showGame(); break;
-      case 'peer_left': joined = false; showLobby(); toast('Opponent left the match. Share your code for a rematch.'); break;
+      case 'peer_left':
+        joined = false;
+        if (msg.public) { room = ''; lastRoom = ''; player = -1; match = null; showLobby(); toast('Your opponent left the match. Press PLAY ONLINE to find a new one.'); }
+        else { showLobby(); toast('Opponent left the match. Share your code for a rematch.'); }
+        break;
       case 'left': room = ''; lastRoom = ''; player = -1; match = null; history.replaceState(null, '', location.pathname); showLobby(); break;
       case 'state': onState(msg); break;
       case 'pong': $('latency').textContent = Math.round(performance.now() - Number(msg.sent || performance.now())) + ' ms'; break;
@@ -76,7 +86,7 @@ function connect() {
   });
   sock.addEventListener('close', () => {
     if (socket !== sock) return;
-    network(false); joined = false; room = ''; player = -1; match = null; showLobby();
+    network(false); joined = false; searching = false; room = ''; player = -1; match = null; showLobby();
     if (retries === 0) toast('Connection lost. Reconnecting...');
     reconnectTimer = setTimeout(() => { try { connect(); } catch (e) {} }, Math.min(8000, 700 * Math.pow(1.7, retries++)));
   });
@@ -232,10 +242,12 @@ window.addEventListener('blur', releaseAll);
 const needConn = f => () => { Sound.init(); Sound.click(); if (!connected) { toast('Cannot reach server. Reload the page.'); return; } f(); };
 $('createBtn').onclick = needConn(() => doSend({ type: 'create' }));
 $('soloBtn').onclick = needConn(() => doSend({ type: 'solo' }));
-$('quickBtn').onclick = needConn(() => { doSend({ type: 'quick' }); $('lobbyStatus').textContent = 'Searching for an opponent...'; });
+$('playBtn').onclick = needConn(() => { if (searching) return; searching = true; doSend({ type: 'find' }); showLobby(); });
+$('cancelSearchBtn').onclick = () => { doSend({ type: 'cancel' }); searching = false; showLobby(); };
 $('joinBtn').onclick = joinRoom; $('codeInput').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); joinRoom(); } };
 $('codeInput').oninput = () => { $('codeInput').value = $('codeInput').value.toUpperCase().replace(/[^A-Z0-9]/g, ''); };
 function joinRoom() { Sound.init(); const code = $('codeInput').value.trim().toUpperCase(); if (code.length !== 5) { toast('Enter the 5-character room code.'); return; } doSend({ type: 'join', code }); }
+$('exitBtn').onclick = () => { $('leaveBtn').onclick(); };
 $('leaveBtn').onclick = () => { doSend({ type: 'leave' }); room = ''; lastRoom = ''; joined = false; match = null; history.replaceState(null, '', location.pathname); showLobby(); };
 function inviteUrl() { const u = new URL(location.href); u.searchParams.set('room', room); return u.href; }
 async function copy(what) { const value = what === 'code' ? room : inviteUrl(); if (!value) return; try { await navigator.clipboard.writeText(value); toast(what === 'code' ? 'Room code copied!' : 'Invite link copied!'); } catch { prompt('Copy this and send it to your friend:', value); } }
@@ -255,8 +267,15 @@ for (const [id, action] of [['boostTouch', 'boost'], ['jumpTouch', 'jump']]) {
 }
 // settings
 function setMuted(m) { Sound.setMuted(m); $('muteBtn').textContent = m ? 'OFF' : 'ON'; $('muteBtn').classList.toggle('off', m); }
+function setRes(v, silent) {
+  const n = v === 'auto' ? 0 : Number(v); G.userScale = n > 0 ? n : 0; if (!G.userScale) G.scale = 1;
+  store.set('rr_res', v); for (const b of document.querySelectorAll('#resSeg button')) b.classList.toggle('on', b.dataset.r === String(v));
+  if (!silent) toast('Resolution: ' + (n ? Math.round(n * 100) + '%' : 'AUTO'));
+}
+for (const b of document.querySelectorAll('#resSeg button')) b.onclick = () => setRes(b.dataset.r);
+setRes(store.get('rr_res', 'auto'), true);
 function markQuality() { for (const b of document.querySelectorAll('#qualitySeg button')) b.classList.toggle('on', b.dataset.q === quality); }
-function applyQuality(q, silent) { quality = q; store.set('rr_quality', q); G.setQuality(q); FX.setLimit(G.q.particles); markQuality(); if (!silent) toast('Graphics: ' + q.toUpperCase()); }
+function applyQuality(q, silent) { G.scale = 1; quality = q; store.set('rr_quality', q); G.setQuality(q); FX.setLimit(G.q.particles); markQuality(); if (!silent) toast('Graphics: ' + q.toUpperCase()); }
 $('settingsBtn').onclick = () => { Sound.init(); $('settingsPanel').classList.toggle('hidden'); };
 for (const b of document.querySelectorAll('#qualitySeg button')) b.onclick = () => { applyQuality(b.dataset.q); lowFpsFor = 0; };
 $('volRange').value = Math.round(Sound.vol * 100); $('volRange').oninput = () => { Sound.init(); Sound.setVolume($('volRange').value / 100); };
@@ -333,6 +352,14 @@ function updateCamera(dt, src) {
   // keep the camera inside the stadium shell
   const inMouth = Math.abs(eye[0]) < GOAL_W / 2 - 1;
   eye[0] = clamp(eye[0], -(SIDE - 1.3), SIDE - 1.3); eye[2] = clamp(eye[2], -(inMouth ? END + GOAL_DEPTH - 1 : END - 1.3), inMouth ? END + GOAL_DEPTH - 1 : END - 1.3); eye[1] = clamp(eye[1], 1.2, CEIL - 0.8);
+  { // also respect the 45-degree corner walls so the camera never ends up behind the glass
+    const lim = SIDE + END - RR.CHAMFER - 1.3 * Math.SQRT2, ex = Math.abs(eye[0]) + Math.abs(eye[2]) - lim;
+    if (ex > 0 && camMode !== 'orbit') { eye[0] -= Math.sign(eye[0]) * ex / 2; eye[2] -= Math.sign(eye[2]) * ex / 2; }
+  }
+  if (camMode === 'chase' && me) {   // squeezed against a wall/goal net: rise up so the car stays in view
+    const hd = Math.hypot(eye[0] - me.x, eye[2] - me.z);
+    if (hd < 7) { eye[1] = Math.max(eye[1], me.y + 4.4 + (7 - hd) * 0.9); look[1] = Math.min(look[1], me.y + 0.8); }
+  }
   if (camMode === 'orbit') { eye[0] = clamp(eye[0], -60, 60); eye[2] = clamp(eye[2], -70, 70); }
   const k = 1 - Math.exp(-dt * stiff), kl = 1 - Math.exp(-dt * lookStiff);
   if (camSnap || !cam.ready) { camSnap = false; if (me) camSm.yaw = me.yaw; camSm.pos = eye.slice(); camSm.look = look.slice(); camSm.fov = fovT; cam.ready = true; }
@@ -369,16 +396,24 @@ function updateVisuals(dt, src) {
     const raw = src.cars[i], dst = rc[i]; if (!raw) continue;
     dst.raw = raw;
     if (snapNext) { dst.x = raw.x; dst.y = raw.y; dst.z = raw.z; dst.yaw = raw.yaw; dst.pitch = raw.pitch || 0; dst.roll = raw.roll || 0; }
-    const kp = clamp(dt * 17, 0, 1);
-    dst.x = lerp(dst.x, raw.x + (raw.vx || 0) * lag, kp); dst.y = lerp(dst.y, raw.y + (raw.vy || 0) * lag, kp); dst.z = lerp(dst.z, raw.z + (raw.vz || 0) * lag, kp);
+    // advance with the server velocity every frame, then pull toward the extrapolated server position:
+    // removes the 30 Hz "stair-step" without adding delay
+    const kp = 1 - Math.exp(-dt * 12);
+    if (!src.replay) { dst.x += (raw.vx || 0) * dt; dst.y += (raw.vy || 0) * dt; dst.z += (raw.vz || 0) * dt; }
+    dst.x += (raw.x + (raw.vx || 0) * lag - dst.x) * kp; dst.y += (raw.y + (raw.vy || 0) * lag - dst.y) * kp; dst.z += (raw.z + (raw.vz || 0) * lag - dst.z) * kp;
+    if (Math.abs(raw.x - dst.x) + Math.abs(raw.z - dst.z) > 6) { dst.x = raw.x; dst.y = raw.y; dst.z = raw.z; }   // teleport (kickoff/reset)
+    if (dst.y < RR.GROUND_Y && raw.grounded !== false) dst.y = RR.GROUND_Y;
     dst.yaw += wrap(raw.yaw - dst.yaw) * clamp(dt * 18, 0, 1);
     dst.pitch += wrap((raw.pitch || 0) - dst.pitch) * clamp(dt * 20, 0, 1); dst.roll += wrap((raw.roll || 0) - dst.roll) * clamp(dt * 20, 0, 1);
     dst.boostOn = !!raw.boostOn; dst.grounded = raw.grounded !== false; dst.vx = raw.vx || 0; dst.vy = raw.vy || 0; dst.vz = raw.vz || 0;
   }
   if (src.ball) {
-    const b = src.ball, kb = clamp(dt * 19, 0, 1);
+    const b = src.ball, kb = clamp(dt * 19, 0, 1), kc = 1 - Math.exp(-dt * 14);
     if (snapNext) { ball.x = b.x; ball.y = b.y; ball.z = b.z; }
-    ball.x = lerp(ball.x, b.x + (b.vx || 0) * lag, kb); ball.y = lerp(ball.y, b.y + (b.vy || 0) * lag, kb); ball.z = lerp(ball.z, b.z + (b.vz || 0) * lag, kb);
+    if (!src.replay) { ball.x += (b.vx || 0) * dt; ball.y += (b.vy || 0) * dt; ball.z += (b.vz || 0) * dt; }
+    ball.x += (b.x + (b.vx || 0) * lag - ball.x) * kc; ball.y += (b.y + (b.vy || 0) * lag - ball.y) * kc; ball.z += (b.z + (b.vz || 0) * lag - ball.z) * kc;
+    if (ball.y < BALL_R) ball.y = BALL_R;
+    if (Math.abs(b.x - ball.x) + Math.abs(b.z - ball.z) > 6) { ball.x = b.x; ball.y = b.y; ball.z = b.z; }
     ball.vx = b.vx || 0; ball.vy = b.vy || 0; ball.vz = b.vz || 0; ball.rx = lerp(ball.rx, b.rx || 0, kb); ball.rz = lerp(ball.rz, b.rz || 0, kb);
   } else {
     ball.x = 0; ball.y = 1.7 + Math.sin(tGlobal * 2.1) * 0.35; ball.z = 0; ball.rx = tGlobal * 0.3; ball.rz = tGlobal * 0.45; ball.vx = ball.vy = ball.vz = 0;
@@ -468,21 +503,26 @@ function renderScene() {
 }
 
 // ------------------------------------------------------------------ main loop
-let lastFrame = performance.now(), fpsEma = 60, lowFpsFor = 0, lastDowngrade = 0, lastScale = 0;
-window.__rr = { get desired() { return desired; }, get keys() { return [...keys]; }, get touch() { return touch; }, get fps() { return fpsEma; }, get scale() { return G.scale; }, G, FX, get quality() { return quality; }, get cam() { return cam; }, get camMode() { return camMode; }, get match() { return match; }, rc, ball, get padFlash() { return padFlash; }, applyQuality, setCam };
+let lastFrame = performance.now(), fpsEma = 60, lowFpsFor = 0, lastDowngrade = 0, stallUntil = 0, refreshEst = 60, slowFor = 0, fastFor = 0;
+window.__rr = { get desired() { return desired; }, get keys() { return [...keys]; }, get touch() { return touch; }, get fps() { return fpsEma; }, get scale() { return G.scale; }, get refresh() { return refreshEst; }, setRes, bench(n = 30) { const px = new Uint8Array(4), g = G.gl; renderScene(); g.readPixels(0, 0, 1, 1, g.RGBA, g.UNSIGNED_BYTE, px); const t0 = performance.now(); for (let i = 0; i < n; i++) { renderScene(); g.readPixels(0, 0, 1, 1, g.RGBA, g.UNSIGNED_BYTE, px); } return (performance.now() - t0) / n; }, G, FX, get quality() { return quality; }, get cam() { return cam; }, get camMode() { return camMode; }, get match() { return match; }, rc, ball, get padFlash() { return padFlash; }, applyQuality, setCam };
 function frame(now) {
   requestAnimationFrame(frame);
   const rawDt = (now - lastFrame) / 1000; lastFrame = now;
   const dt = clamp(rawDt, 0.0005, 0.05); tGlobal += dt;
   if (rawDt > 0 && rawDt < 0.25) fpsEma += (1 / rawDt - fpsEma) * 0.05;
-  // adaptive resolution first, then preset downgrade (never while hidden / after a stall)
-  if (!document.hidden && rawDt < 0.25) {
-    if (now - lastScale > 1200) {
-      if (fpsEma < 52 && G.scale > 0.55) { G.scale = Math.max(0.55, G.scale * 0.9); lastScale = now; }
-      else if (fpsEma > 57 && G.scale < 1) { G.scale = Math.min(1, G.scale * 1.04); lastScale = now; }
+  // Automatic resolution (only when the player chose AUTO): gentle, sustained-only changes so a brief hitch never
+  // leaves the picture pixelated. The refresh rate is learned so 60 Hz screens are not mistaken for "slow".
+  if (rawDt > 0.12 || document.hidden) stallUntil = now + 3000;
+  else if (now > stallUntil) {
+    refreshEst = Math.max(refreshEst * 0.9995, Math.min(fpsEma, 240));
+    const slow = fpsEma < Math.min(50, refreshEst * 0.82), fast = fpsEma > refreshEst * 0.93;
+    slowFor = slow ? slowFor + rawDt : 0; fastFor = fast ? fastFor + rawDt : 0;
+    if (!G.userScale) {
+      if (slowFor > 2 && G.scale > G.q.minScale) { G.scale = Math.max(G.q.minScale, G.scale * 0.92); slowFor = 0; }
+      else if (fastFor > 1.5 && G.scale < 1) { G.scale = Math.min(1, G.scale * 1.06); fastFor = 0; }
     }
-    lowFpsFor = (fpsEma < 40 && G.scale <= 0.6) ? lowFpsFor + rawDt : 0;
-    if (lowFpsFor > 3 && quality !== 'low' && now - lastDowngrade > 8000) { applyQuality(quality === 'high' ? 'medium' : 'low', true); G.scale = 0.85; toast('Graphics set to ' + quality.toUpperCase() + ' for smoother play'); lowFpsFor = 0; lastDowngrade = now; fpsEma = 50; }
+    lowFpsFor = (fpsEma < 30 && (G.userScale || G.scale <= G.q.minScale + 0.01)) ? lowFpsFor + rawDt : 0;
+    if (lowFpsFor > 5 && quality !== 'low' && now - lastDowngrade > 15000) { applyQuality(quality === 'high' ? 'medium' : 'low', true); G.scale = 1; toast('Graphics set to ' + quality.toUpperCase() + ' for smoother play'); lowFpsFor = 0; lastDowngrade = now; stallUntil = now + 3000; }
   }
   updateInput();
   if (joined && now - lastInput > 33) { doSend(desired); lastSent = JSON.stringify(desired); lastInput = now; }

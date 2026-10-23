@@ -49,3 +49,5 @@ body.replay #floatingMessage,body.replay #boostMeter,body.replay #speedometer{op
 @media(max-width:790px){#settingsBtn{top:44px;right:14px}#settingsPanel{right:14px;top:88px}}
 #boostCount{color:#fff!important}
 body.replay #scoreboard,body.replay #cameraBadge{z-index:9}
+#exitBtn{position:fixed;z-index:12;left:36px;top:118px;pointer-events:auto;background:#0a1730cc;color:#cfe6ff;border:1px solid #3b5477;border-radius:8px;padding:6px 12px;font-size:10px;font-weight:900;letter-spacing:1.5px}#exitBtn:hover{border-color:#ff7a6a;color:#ffb0a5}
+body.playing #scanlines{display:none}#scanlines{opacity:.07}#settingsPanel{width:330px}#resSeg button{padding:6px 7px}
