@@ -1,8 +1,8 @@
 {
-  "name": "rocket-rivals-better-driving",
-  "version": "1.1.0",
+  "name": "rocket-rivals-camera-fix",
+  "version": "1.2.0",
   "private": true,
-  "description": "Rocket Rivals multiplayer - upgraded car handling, iPad single-file server",
+  "description": "Rocket Rivals 1v1 - stable car-anchored camera; fixed controls on both field halves",
   "engines": {
     "node": ">=20"
   },
